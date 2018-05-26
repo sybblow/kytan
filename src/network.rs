@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 use std::io::{Write, Read};
 use mio;
 use dns_lookup;
-use bincode::{serialize, deserialize, Infinite};
+use bincode::{serialize, deserialize};
 use device;
 use utils;
 use snap;
@@ -78,7 +78,7 @@ fn derive_keys(password: &str) -> (aead::SealingKey, aead::OpeningKey) {
 fn initiate(socket: &UdpSocket, addr: &SocketAddr, secret: &str) -> Result<(Id, Token), String> {
     let (sealing_key, opening_key) = derive_keys(secret);
     let req_msg = Message::Request;
-    let encoded_req_msg: Vec<u8> = try!(serialize(&req_msg, Infinite).map_err(|e| e.to_string()));
+    let encoded_req_msg: Vec<u8> = try!(serialize(&req_msg).map_err(|e| e.to_string()));
     let mut encrypted_req_msg = encoded_req_msg.clone();
     encrypted_req_msg.resize(encoded_req_msg.len() + TAG_LEN, 0);
     let mut remaining_len =
@@ -196,7 +196,7 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str) {
                         token: token,
                         data: encoder.compress_vec(data).unwrap(),
                     };
-                    let encoded_msg = serialize(&msg, Infinite).unwrap();
+                    let encoded_msg = serialize(&msg).unwrap();
                     let mut encrypted_msg = encoded_msg.clone();
                     encrypted_msg.resize(encoded_msg.len() + TAG_LEN, 0);
                     let data_len =
@@ -290,7 +290,7 @@ pub fn serve(port: u16, secret: &str) {
                                 id: client_id,
                                 token: client_token,
                             };
-                            let encoded_reply = serialize(&reply, Infinite).unwrap();
+                            let encoded_reply = serialize(&reply).unwrap();
                             let mut encrypted_reply = encoded_reply.clone();
                             encrypted_reply.resize(encoded_reply.len() + TAG_LEN, 0);
                             let data_len = aead::seal_in_place(&sealing_key,
@@ -348,7 +348,7 @@ pub fn serve(port: u16, secret: &str) {
                                 token: token,
                                 data: encoder.compress_vec(data).unwrap(),
                             };
-                            let encoded_msg = serialize(&msg, Infinite).unwrap();
+                            let encoded_msg = serialize(&msg).unwrap();
                             let mut encrypted_msg = encoded_msg.clone();
                             encrypted_msg.resize(encoded_msg.len() + TAG_LEN, 0);
                             let data_len = aead::seal_in_place(&sealing_key,

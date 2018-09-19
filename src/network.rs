@@ -19,7 +19,7 @@ use mio;
 use rand::{thread_rng, Rng};
 use ring::{aead, digest, pbkdf2};
 use snap;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
@@ -368,7 +368,15 @@ fn write_all(tun: &mut device::Tun, data: &[u8]) {
     let data_len = data.len();
     let mut sent_len = 0;
     while sent_len < data_len {
-        sent_len += tun.write(&data[sent_len..data_len]).unwrap();
+        match tun.write(&data[sent_len..data_len]) {
+            Ok(len) => {
+                sent_len += len;
+            }
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
+            Err(e) => {
+                panic!("{:?}", e);
+            }
+        }
     }
 }
 
@@ -376,7 +384,15 @@ fn send_all(sockfd: &mio::net::UdpSocket, data: &[u8], addr: &SocketAddr) {
     let data_len = data.len();
     let mut sent_len = 0;
     while sent_len < data_len {
-        sent_len += sockfd.send_to(&data[sent_len..data_len], &addr).unwrap();
+        match sockfd.send_to(&data[sent_len..data_len], &addr) {
+            Ok(len) => {
+                sent_len += len;
+            }
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
+            Err(e) => {
+                panic!("{:?}", e);
+            }
+        }
     }
 }
 

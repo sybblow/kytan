@@ -174,12 +174,7 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str) {
                         Message::Data { id: _, token: server_token, data } => {
                             if token == server_token {
                                 let decompressed_data = decoder.decompress_vec(&data).unwrap();
-                                let data_len = decompressed_data.len();
-                                let mut sent_len = 0;
-                                while sent_len < data_len {
-                                    sent_len += tun.write(&decompressed_data[sent_len..data_len])
-                                        .unwrap();
-                                }
+                                write_all(&mut tun, &decompressed_data);
                             } else {
                                 warn!("Token mismatched. Received: {}. Expected: {}",
                                       server_token,
@@ -202,11 +197,7 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str) {
                     let data_len =
                         aead::seal_in_place(&sealing_key, NONCE, &[], &mut encrypted_msg, TAG_LEN)
                             .unwrap();
-                    let mut sent_len = 0;
-                    while sent_len < data_len {
-                        sent_len += sockfd.send_to(&encrypted_msg[sent_len..data_len], &remote_addr)
-                            .unwrap();
-                    }
+                    send_all(&sockfd, &encrypted_msg[..data_len], &remote_addr);
                 }
                 _ => unreachable!(),
             }
@@ -299,12 +290,7 @@ pub fn serve(port: u16, secret: &str) {
                                                                &mut encrypted_reply,
                                                                TAG_LEN)
                                 .unwrap();
-                            let mut sent_len = 0;
-                            while sent_len < data_len {
-                                sent_len +=
-                                    sockfd.send_to(&encrypted_reply[sent_len..data_len], &addr)
-                                        .unwrap();
-                            }
+                            send_all(&sockfd, &encrypted_reply[..data_len], &addr);
                         }
                         Message::Response { id: _, token: _ } => {
                             warn!("Invalid message {:?} from {}", msg, addr)
@@ -322,13 +308,7 @@ pub fn serve(port: u16, secret: &str) {
                                     } else {
                                         let decompressed_data = decoder.decompress_vec(&data)
                                             .unwrap();
-                                        let data_len = decompressed_data.len();
-                                        let mut sent_len = 0;
-                                        while sent_len < data_len {
-                                            sent_len +=
-                                                tun.write(&decompressed_data[sent_len..data_len])
-                                                    .unwrap();
-                                        }
+                                        write_all(&mut tun, &decompressed_data);
                                     }
                                 }
                             }
@@ -357,18 +337,33 @@ pub fn serve(port: u16, secret: &str) {
                                                                &mut encrypted_msg,
                                                                TAG_LEN)
                                 .unwrap();
-                            let mut sent_len = 0;
-                            while sent_len < data_len {
-                                sent_len +=
-                                    sockfd.send_to(&encrypted_msg[sent_len..data_len], &addr)
-                                        .unwrap();
-                            }
+                            send_all(&sockfd, &encrypted_msg[..data_len], &addr);
                         }
                     }
                 }
                 _ => unreachable!(),
             }
         }
+    }
+}
+
+fn write_all(tun: &mut device::Tun, data: &[u8]) {
+    let data_len = data.len();
+    let mut sent_len = 0;
+    while sent_len < data_len {
+        sent_len +=
+            tun.write(&data[sent_len..data_len])
+                .unwrap();
+    }
+}
+
+fn send_all(sockfd: &mio::net::UdpSocket, data: &[u8], addr: &SocketAddr) {
+    let data_len = data.len();
+    let mut sent_len = 0;
+    while sent_len < data_len {
+        sent_len +=
+            sockfd.send_to(&data[sent_len..data_len], &addr)
+                .unwrap();
     }
 }
 

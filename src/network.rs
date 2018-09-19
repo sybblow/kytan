@@ -12,19 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::net::{SocketAddr, IpAddr, UdpSocket};
+use bincode::{deserialize, serialize};
+use device;
+use dns_lookup;
+use mio;
+use rand::{thread_rng, Rng};
+use ring::{aead, digest, pbkdf2};
+use snap;
+use std::io::{Read, Write};
+use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
-use std::io::{Write, Read};
-use mio;
-use dns_lookup;
-use bincode::{serialize, deserialize};
-use device;
-use utils;
-use snap;
-use rand::{thread_rng, Rng};
 use transient_hashmap::TransientHashMap;
-use ring::{aead, pbkdf2, digest};
+use utils;
 
 pub static INTERRUPTED: AtomicBool = ATOMIC_BOOL_INIT;
 static CONNECTED: AtomicBool = ATOMIC_BOOL_INIT;
@@ -55,12 +55,10 @@ fn create_tun_attempt() -> device::Tun {
     fn attempt(id: u8) -> device::Tun {
         match id {
             255 => panic!("Unable to create TUN device."),
-            _ => {
-                match device::Tun::create(id) {
-                    Ok(tun) => tun,
-                    Err(_) => attempt(id + 1),
-                }
-            }
+            _ => match device::Tun::create(id) {
+                Ok(tun) => tun,
+                Err(_) => attempt(id + 1),
+            },
         }
     }
     attempt(0)
@@ -85,8 +83,11 @@ fn initiate(socket: &UdpSocket, addr: &SocketAddr, secret: &str) -> Result<(Id, 
         aead::seal_in_place(&sealing_key, NONCE, &[], &mut encrypted_req_msg, TAG_LEN).unwrap();
 
     while remaining_len > 0 {
-        let sent_bytes = try!(socket.send_to(&encrypted_req_msg, addr)
-            .map_err(|e| e.to_string()));
+        let sent_bytes = try!(
+            socket
+                .send_to(&encrypted_req_msg, addr)
+                .map_err(|e| e.to_string())
+        );
         remaining_len -= sent_bytes;
     }
     info!("Request sent to {}.", addr);
@@ -116,33 +117,41 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str) {
     let (sealing_key, opening_key) = derive_keys(secret);
 
     let (id, token) = initiate(&socket, &remote_addr, &secret).unwrap();
-    info!("Session established with token {}. Assigned IP address: 10.10.10.{}.",
-          token,
-          id);
+    info!(
+        "Session established with token {}. Assigned IP address: 10.10.10.{}.",
+        token, id
+    );
 
     info!("Bringing up TUN device.");
     let mut tun = create_tun_attempt();
     let tun_rawfd = tun.as_raw_fd();
     tun.up(id);
     let tunfd = mio::unix::EventedFd(&tun_rawfd);
-    info!("TUN device {} initialized. Internal IP: 10.10.10.{}/24.",
-          tun.name(),
-          id);
+    info!(
+        "TUN device {} initialized. Internal IP: 10.10.10.{}/24.",
+        tun.name(),
+        id
+    );
 
     let poll = mio::Poll::new().unwrap();
     info!("Setting up TUN device for polling.");
-    poll.register(&tunfd, TUN, mio::Ready::readable(), mio::PollOpt::level()).unwrap();
+    poll.register(&tunfd, TUN, mio::Ready::readable(), mio::PollOpt::level())
+        .unwrap();
 
     info!("Setting up socket for polling.");
     let sockfd = mio::net::UdpSocket::from_socket(socket).unwrap();
-    poll.register(&sockfd, SOCK, mio::Ready::readable(), mio::PollOpt::level()).unwrap();
+    poll.register(&sockfd, SOCK, mio::Ready::readable(), mio::PollOpt::level())
+        .unwrap();
 
     let mut events = mio::Events::with_capacity(1024);
     let mut buf = [0u8; 1600];
 
     // RAII so ignore unused variable warning
     let _gw = if default {
-        Some(utils::DefaultGateway::create("10.10.10.1", &format!("{}", remote_addr.ip())))
+        Some(utils::DefaultGateway::create(
+            "10.10.10.1",
+            &format!("{}", remote_addr.ip()),
+        ))
     } else {
         None
     };
@@ -167,18 +176,22 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str) {
                     let dlen = decrypted_buf.len();
                     let msg: Message = deserialize(&decrypted_buf[0..dlen]).unwrap();
                     match msg {
-                        Message::Request |
-                        Message::Response { id: _, token: _ } => {
+                        Message::Request | Message::Response { id: _, token: _ } => {
                             warn!("Invalid message {:?} from {}", msg, addr);
                         }
-                        Message::Data { id: _, token: server_token, data } => {
+                        Message::Data {
+                            id: _,
+                            token: server_token,
+                            data,
+                        } => {
                             if token == server_token {
                                 let decompressed_data = decoder.decompress_vec(&data).unwrap();
                                 write_all(&mut tun, &decompressed_data);
                             } else {
-                                warn!("Token mismatched. Received: {}. Expected: {}",
-                                      server_token,
-                                      token);
+                                warn!(
+                                    "Token mismatched. Received: {}. Expected: {}",
+                                    server_token, token
+                                );
                             }
                         }
                     }
@@ -224,16 +237,20 @@ pub fn serve(port: u16, secret: &str) {
 
     let tun_rawfd = tun.as_raw_fd();
     let tunfd = mio::unix::EventedFd(&tun_rawfd);
-    info!("TUN device {} initialized. Internal IP: 10.10.10.1/24.",
-          tun.name());
+    info!(
+        "TUN device {} initialized. Internal IP: 10.10.10.1/24.",
+        tun.name()
+    );
 
     let addr = format!("0.0.0.0:{}", port).parse().unwrap();
     let sockfd = mio::net::UdpSocket::bind(&addr).unwrap();
     info!("Listening on: 0.0.0.0:{}.", port);
 
     let poll = mio::Poll::new().unwrap();
-    poll.register(&sockfd, SOCK, mio::Ready::readable(), mio::PollOpt::level()).unwrap();
-    poll.register(&tunfd, TUN, mio::Ready::readable(), mio::PollOpt::level()).unwrap();
+    poll.register(&sockfd, SOCK, mio::Ready::readable(), mio::PollOpt::level())
+        .unwrap();
+    poll.register(&tunfd, TUN, mio::Ready::readable(), mio::PollOpt::level())
+        .unwrap();
 
     let mut events = mio::Events::with_capacity(1024);
 
@@ -273,9 +290,10 @@ pub fn serve(port: u16, secret: &str) {
 
                             client_info.insert(client_id, (client_token, addr));
 
-                            info!("Got request from {}. Assigning IP address: 10.10.10.{}.",
-                                  addr,
-                                  client_id);
+                            info!(
+                                "Got request from {}. Assigning IP address: 10.10.10.{}.",
+                                addr, client_id
+                            );
 
                             let reply = Message::Response {
                                 id: client_id,
@@ -284,35 +302,33 @@ pub fn serve(port: u16, secret: &str) {
                             let encoded_reply = serialize(&reply).unwrap();
                             let mut encrypted_reply = encoded_reply.clone();
                             encrypted_reply.resize(encoded_reply.len() + TAG_LEN, 0);
-                            let data_len = aead::seal_in_place(&sealing_key,
-                                                               NONCE,
-                                                               &[],
-                                                               &mut encrypted_reply,
-                                                               TAG_LEN)
-                                .unwrap();
+                            let data_len = aead::seal_in_place(
+                                &sealing_key,
+                                NONCE,
+                                &[],
+                                &mut encrypted_reply,
+                                TAG_LEN,
+                            ).unwrap();
                             send_all(&sockfd, &encrypted_reply[..data_len], &addr);
                         }
                         Message::Response { id: _, token: _ } => {
                             warn!("Invalid message {:?} from {}", msg, addr)
                         }
-                        Message::Data { id, token, data } => {
-                            match client_info.get(&id) {
-                                None => warn!("Unknown data with token {} from id {}.", token, id),
-                                Some(&(t, _)) => {
-                                    if t != token {
-                                        warn!("Unknown data with mismatched token {} from id {}. \
-                                               Expected: {}",
-                                              token,
-                                              id,
-                                              t);
-                                    } else {
-                                        let decompressed_data = decoder.decompress_vec(&data)
-                                            .unwrap();
-                                        write_all(&mut tun, &decompressed_data);
-                                    }
+                        Message::Data { id, token, data } => match client_info.get(&id) {
+                            None => warn!("Unknown data with token {} from id {}.", token, id),
+                            Some(&(t, _)) => {
+                                if t != token {
+                                    warn!(
+                                        "Unknown data with mismatched token {} from id {}. \
+                                         Expected: {}",
+                                        token, id, t
+                                    );
+                                } else {
+                                    let decompressed_data = decoder.decompress_vec(&data).unwrap();
+                                    write_all(&mut tun, &decompressed_data);
                                 }
                             }
-                        }
+                        },
                     }
                 }
                 TUN => {
@@ -331,12 +347,13 @@ pub fn serve(port: u16, secret: &str) {
                             let encoded_msg = serialize(&msg).unwrap();
                             let mut encrypted_msg = encoded_msg.clone();
                             encrypted_msg.resize(encoded_msg.len() + TAG_LEN, 0);
-                            let data_len = aead::seal_in_place(&sealing_key,
-                                                               NONCE,
-                                                               &[],
-                                                               &mut encrypted_msg,
-                                                               TAG_LEN)
-                                .unwrap();
+                            let data_len = aead::seal_in_place(
+                                &sealing_key,
+                                NONCE,
+                                &[],
+                                &mut encrypted_msg,
+                                TAG_LEN,
+                            ).unwrap();
                             send_all(&sockfd, &encrypted_msg[..data_len], &addr);
                         }
                     }
@@ -351,9 +368,7 @@ fn write_all(tun: &mut device::Tun, data: &[u8]) {
     let data_len = data.len();
     let mut sent_len = 0;
     while sent_len < data_len {
-        sent_len +=
-            tun.write(&data[sent_len..data_len])
-                .unwrap();
+        sent_len += tun.write(&data[sent_len..data_len]).unwrap();
     }
 }
 
@@ -361,24 +376,24 @@ fn send_all(sockfd: &mio::net::UdpSocket, data: &[u8], addr: &SocketAddr) {
     let data_len = data.len();
     let mut sent_len = 0;
     while sent_len < data_len {
-        sent_len +=
-            sockfd.send_to(&data[sent_len..data_len], &addr)
-                .unwrap();
+        sent_len += sockfd.send_to(&data[sent_len..data_len], &addr).unwrap();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
     use network::*;
+    use std::net::Ipv4Addr;
 
     #[cfg(target_os = "linux")]
     use std::thread;
 
     #[test]
     fn resolve_test() {
-        assert_eq!(resolve("127.0.0.1").unwrap(),
-                   IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+        assert_eq!(
+            resolve("127.0.0.1").unwrap(),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
+        );
     }
 
     #[test]

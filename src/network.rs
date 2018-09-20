@@ -75,21 +75,16 @@ fn derive_keys(password: &str) -> (aead::SealingKey, aead::OpeningKey) {
 
 fn initiate(socket: &UdpSocket, addr: &SocketAddr, secret: &str) -> Result<(Id, Token), String> {
     let (sealing_key, opening_key) = derive_keys(secret);
-    let req_msg = Message::Request;
-    let encoded_req_msg: Vec<u8> = try!(serialize(&req_msg).map_err(|e| e.to_string()));
-    let mut encrypted_req_msg = encoded_req_msg.clone();
-    encrypted_req_msg.resize(encoded_req_msg.len() + TAG_LEN, 0);
-    let mut remaining_len =
-        aead::seal_in_place(&sealing_key, NONCE, &[], &mut encrypted_req_msg, TAG_LEN).unwrap();
-
-    while remaining_len > 0 {
-        let sent_bytes = try!(
-            socket
-                .send_to(&encrypted_req_msg, addr)
-                .map_err(|e| e.to_string())
-        );
-        remaining_len -= sent_bytes;
-    }
+    let mut encoded_req_msg: Vec<u8> =
+        try!(serialize(&Message::Request).map_err(|e| e.to_string()));
+    let encrypted_req_msg_len = encoded_req_msg.len() + TAG_LEN;
+    encoded_req_msg.resize(encrypted_req_msg_len, 0);
+    let encrypted_req_msg_len =
+        aead::seal_in_place(&sealing_key, NONCE, &[], &mut encoded_req_msg, TAG_LEN).unwrap();
+    try!(
+        block_send_all(socket, &encoded_req_msg[..encrypted_req_msg_len], addr)
+            .map_err(|e| e.to_string())
+    );
     info!("Request sent to {}.", addr);
 
     let mut buf = [0u8; 1600];
@@ -281,8 +276,16 @@ pub fn serve(port: u16, secret: &str) {
                     let (len, addr) = sockfd.recv_from(&mut buf).unwrap();
                     let decrypted_buf =
                         aead::open_in_place(&opening_key, NONCE, &[], 0, &mut buf[0..len]).unwrap();
-                    let dlen = decrypted_buf.len();
-                    let msg: Message = deserialize(&decrypted_buf[0..dlen]).unwrap();
+                    let msg: Message = match deserialize(&decrypted_buf) {
+                        Ok(msg) => msg,
+                        Err(e) => {
+                            warn!(
+                                "Invalid raw message {:?} from {} deserialize failed: {:?}",
+                                decrypted_buf, addr, e
+                            );
+                            continue;
+                        }
+                    };
                     match msg {
                         Message::Request => {
                             let client_id: Id = available_ids.pop().unwrap();
@@ -365,10 +368,9 @@ pub fn serve(port: u16, secret: &str) {
 }
 
 fn write_all(tun: &mut device::Tun, data: &[u8]) {
-    let data_len = data.len();
     let mut sent_len = 0;
-    while sent_len < data_len {
-        match tun.write(&data[sent_len..data_len]) {
+    while sent_len < data.len() {
+        match tun.write(&data[sent_len..]) {
             Ok(len) => {
                 sent_len += len;
             }
@@ -381,10 +383,9 @@ fn write_all(tun: &mut device::Tun, data: &[u8]) {
 }
 
 fn send_all(sockfd: &mio::net::UdpSocket, data: &[u8], addr: &SocketAddr) {
-    let data_len = data.len();
     let mut sent_len = 0;
-    while sent_len < data_len {
-        match sockfd.send_to(&data[sent_len..data_len], &addr) {
+    while sent_len < data.len() {
+        match sockfd.send_to(&data[sent_len..], &addr) {
             Ok(len) => {
                 sent_len += len;
             }
@@ -394,6 +395,15 @@ fn send_all(sockfd: &mio::net::UdpSocket, data: &[u8], addr: &SocketAddr) {
             }
         }
     }
+}
+
+fn block_send_all(sockfd: &UdpSocket, data: &[u8], addr: &SocketAddr) -> io::Result<()> {
+    let mut sent_len = 0;
+    while sent_len < data.len() {
+        sent_len += try!(sockfd.send_to(&data[sent_len..], &addr))
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

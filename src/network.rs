@@ -75,16 +75,8 @@ fn derive_keys(password: &str) -> (aead::SealingKey, aead::OpeningKey) {
 
 fn initiate(socket: &UdpSocket, addr: &SocketAddr, secret: &str) -> Result<(Id, Token), String> {
     let (sealing_key, opening_key) = derive_keys(secret);
-    let mut encoded_req_msg: Vec<u8> =
-        try!(serialize(&Message::Request).map_err(|e| e.to_string()));
-    let encrypted_req_msg_len = encoded_req_msg.len() + TAG_LEN;
-    encoded_req_msg.resize(encrypted_req_msg_len, 0);
-    let encrypted_req_msg_len =
-        aead::seal_in_place(&sealing_key, NONCE, &[], &mut encoded_req_msg, TAG_LEN).unwrap();
-    try!(
-        block_send_all(socket, &encoded_req_msg[..encrypted_req_msg_len], addr)
-            .map_err(|e| e.to_string())
-    );
+    let req_msg_buf = encap_msg(&Message::Request, &sealing_key);
+    try!(block_send_all(socket, req_msg_buf.data(), addr).map_err(|e| e.to_string()));
     info!("Request sent to {}.", addr);
 
     let mut buf = [0u8; 1600];
@@ -199,13 +191,8 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str) {
                         token: token,
                         data: encoder.compress_vec(data).unwrap(),
                     };
-                    let encoded_msg = serialize(&msg).unwrap();
-                    let mut encrypted_msg = encoded_msg.clone();
-                    encrypted_msg.resize(encoded_msg.len() + TAG_LEN, 0);
-                    let data_len =
-                        aead::seal_in_place(&sealing_key, NONCE, &[], &mut encrypted_msg, TAG_LEN)
-                            .unwrap();
-                    send_all(&sockfd, &encrypted_msg[..data_len], &remote_addr);
+                    let msg_buf = encap_msg(&msg, &sealing_key);
+                    send_all(&sockfd, msg_buf.data(), &remote_addr);
                 }
                 _ => unreachable!(),
             }
@@ -302,17 +289,8 @@ pub fn serve(port: u16, secret: &str) {
                                 id: client_id,
                                 token: client_token,
                             };
-                            let encoded_reply = serialize(&reply).unwrap();
-                            let mut encrypted_reply = encoded_reply.clone();
-                            encrypted_reply.resize(encoded_reply.len() + TAG_LEN, 0);
-                            let data_len = aead::seal_in_place(
-                                &sealing_key,
-                                NONCE,
-                                &[],
-                                &mut encrypted_reply,
-                                TAG_LEN,
-                            ).unwrap();
-                            send_all(&sockfd, &encrypted_reply[..data_len], &addr);
+                            let reply_buf = encap_msg(&reply, &sealing_key);
+                            send_all(&sockfd, reply_buf.data(), &addr);
                         }
                         Message::Response { id: _, token: _ } => {
                             warn!("Invalid message {:?} from {}", msg, addr)
@@ -347,17 +325,8 @@ pub fn serve(port: u16, secret: &str) {
                                 token: token,
                                 data: encoder.compress_vec(data).unwrap(),
                             };
-                            let encoded_msg = serialize(&msg).unwrap();
-                            let mut encrypted_msg = encoded_msg.clone();
-                            encrypted_msg.resize(encoded_msg.len() + TAG_LEN, 0);
-                            let data_len = aead::seal_in_place(
-                                &sealing_key,
-                                NONCE,
-                                &[],
-                                &mut encrypted_msg,
-                                TAG_LEN,
-                            ).unwrap();
-                            send_all(&sockfd, &encrypted_msg[..data_len], &addr);
+                            let msg_buf = encap_msg(&msg, &sealing_key);
+                            send_all(&sockfd, msg_buf.data(), &addr);
                         }
                     }
                 }
@@ -379,6 +348,30 @@ fn write_all(tun: &mut device::Tun, data: &[u8]) {
                 panic!("{:?}", e);
             }
         }
+    }
+}
+
+fn encap_msg(msg: &Message, sealing_key: &aead::SealingKey) -> Buf {
+    let mut encoded_msg: Vec<u8> = serialize(msg).unwrap();
+    let len = encoded_msg.len() + TAG_LEN;
+    encoded_msg.resize(len, 0);
+    let len = aead::seal_in_place(&sealing_key, NONCE, &[], &mut encoded_msg, TAG_LEN).unwrap();
+
+    Buf::new(encoded_msg, len)
+}
+
+struct Buf {
+    inner_data: Vec<u8>,
+    pub len: usize,
+}
+
+impl Buf {
+    fn new(inner_data: Vec<u8>, len: usize) -> Buf {
+        Buf { inner_data, len }
+    }
+
+    fn data(&self) -> &[u8] {
+        &self.inner_data[..self.len]
     }
 }
 

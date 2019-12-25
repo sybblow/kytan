@@ -41,6 +41,7 @@ enum Message {
     Request,
     Response { id: Id, token: Token },
     Data { id: Id, token: Token, data: Vec<u8> },
+    RequestWithID { id: Id },
 }
 
 const TUN: mio::Token = mio::Token(0);
@@ -92,7 +93,26 @@ fn initiate(socket: &UdpSocket, addr: &SocketAddr, secret: &str) -> Result<(Id, 
     }
 }
 
-pub fn connect(host: &str, port: u16, default: bool, secret: &str) {
+fn initiate2(socket: &UdpSocket, addr: &SocketAddr, secret: &str, id: u8) -> Result<Token, String> {
+    let (sealing_key, opening_key) = derive_keys(secret);
+    let req_msg_buf = encap_msg(&Message::RequestWithID { id }, &sealing_key);
+    try!(block_send_all(socket, req_msg_buf.data(), addr).map_err(|e| e.to_string()));
+    info!("Request sent to {}.", addr);
+
+    let mut buf = [0u8; 1600];
+    let (len, recv_addr) = try!(socket.recv_from(&mut buf).map_err(|e| e.to_string()));
+    assert_eq!(&recv_addr, addr);
+    info!("Response received from {}.", addr);
+    let decrypted_buf = aead::open_in_place(&opening_key, NONCE, &[], 0, &mut buf[0..len]).unwrap();
+    let dlen = decrypted_buf.len();
+    let resp_msg: Message = try!(deserialize(&decrypted_buf[0..dlen]).map_err(|e| e.to_string()));
+    match resp_msg {
+        Message::Response { token, .. } => Ok(token),
+        _ => Err(format!("Invalid message {:?} from {}", resp_msg, addr)),
+    }
+}
+
+pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Option<u8>) {
     info!("Working in client mode.");
     let remote_ip = resolve(host).unwrap();
     let remote_addr = SocketAddr::new(remote_ip, port);
@@ -103,7 +123,11 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str) {
 
     let (sealing_key, opening_key) = derive_keys(secret);
 
-    let (id, token) = initiate(&socket, &remote_addr, &secret).unwrap();
+    let (id, token) = if let Some(v) = addr_id {
+        (v, initiate2(&socket, &remote_addr, &secret, v).unwrap())
+    } else {
+        initiate(&socket, &remote_addr, &secret).unwrap()
+    };
     info!(
         "Session established with token {}. Assigned IP address: 10.10.10.{}.",
         token, id
@@ -163,6 +187,9 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str) {
                     let dlen = decrypted_buf.len();
                     let msg: Message = deserialize(&decrypted_buf[0..dlen]).unwrap();
                     match msg {
+                        Message::RequestWithID { .. } => {
+                            unimplemented!();
+                        }
                         Message::Request | Message::Response { id: _, token: _ } => {
                             warn!("Invalid message {:?} from {}", msg, addr);
                         }
@@ -291,6 +318,9 @@ pub fn serve(port: u16, secret: &str) {
                             };
                             let reply_buf = encap_msg(&reply, &sealing_key);
                             send_all(&sockfd, reply_buf.data(), &addr);
+                        }
+                        Message::RequestWithID { .. } => {
+                            unimplemented!();
                         }
                         Message::Response { id: _, token: _ } => {
                             warn!("Invalid message {:?} from {}", msg, addr)

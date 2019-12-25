@@ -58,6 +58,7 @@ fn main() {
     opts.optopt("p", "port", "UDP port to listen/connect", "PORT");
     opts.optopt("h", "host", "remote host to connect (client mode)", "HOST");
     opts.optopt("s", "secret", "shared secret", "PASSWORD");
+    opts.optopt("a", "address-id", "last part of network address", "ADDR_ID");
 
     let args: Vec<String> = std::env::args().collect();
     let program = args[0].clone();
@@ -79,11 +80,13 @@ fn main() {
         libc::signal(libc::SIGTERM, handle_signal as libc::sighandler_t);
     }
 
+    let addr_id =matches.opt_get::<u8>("a").unwrap();
+
     match mode.as_ref() {
         "s" => network::serve(port, &secret),
         "c" => {
             let host = matches.opt_str("h").unwrap();
-            network::connect(&host, port, true, &secret)
+            network::connect(&host, port, true, &secret, addr_id)
         }
         _ => unreachable!(),
     };

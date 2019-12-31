@@ -86,7 +86,6 @@ fn main() {
 
     let addr_id = matches.opt_get::<u8>("a").unwrap();
     let reserved_ids = matches.opt_get::<utils::IdRange>("x").unwrap();
-    println!("{:?}", reserved_ids);
 
     match mode.as_ref() {
         "s" => network::serve(port, &secret, reserved_ids),

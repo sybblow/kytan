@@ -186,13 +186,29 @@ pub fn get_public_ip() -> Result<String, String> {
 
 #[derive(Debug, PartialEq)]
 pub struct IdRange {
-    pub x: u8,
-    pub y: u8,
+    x: u8,
+    y: u8,
 }
 
 impl IdRange {
     pub fn is_valid(&self) -> bool {
         self.x <= self.y
+    }
+
+    pub fn get_other_ids(&self) -> Vec<u8> {
+        let mut v = vec![];
+        if 2 < self.x {
+            v.append(&mut (2..self.x).collect());
+        }
+        if self.y < 254 {
+            v.append(&mut (self.y..254).collect());
+        }
+
+        v
+    }
+
+    pub fn contains(&self, id: u8) -> bool {
+        return self.x <= id && id <= self.y;
     }
 }
 

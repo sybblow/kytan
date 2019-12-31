@@ -262,10 +262,7 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
     let mut events = mio::Events::with_capacity(1024);
 
     let mut rng = thread_rng();
-    let mut available_ids: Vec<Id> = match reserved_ids {
-        Some(ref r) if r.is_valid() => get_exclusive_ids(r),
-        _ => (2..254).collect()
-    };
+    let mut client_id_pool = ClientIdPool::new(reserved_ids);
     let mut client_info: TransientHashMap<Id, (Token, SocketAddr)> = TransientHashMap::new(60);
 
     let mut buf = [0u8; 1600];
@@ -283,7 +280,7 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
         }
 
         // Clear expired client info
-        available_ids.append(&mut client_info.prune());
+        client_id_pool.put(&client_info.prune());
         poll.poll(&mut events, None).unwrap();
         for event in events.iter() {
             match event.token() {
@@ -303,7 +300,7 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
                     };
                     match msg {
                         Message::Request => {
-                            let client_id: Id = available_ids.pop().unwrap();
+                            let client_id: Id = client_id_pool.get().unwrap();
                             let client_token: Token = rng.gen::<Token>();
 
                             client_info.insert(client_id, (client_token, addr));
@@ -444,16 +441,38 @@ fn block_send_all(sockfd: &UdpSocket, data: &[u8], addr: &SocketAddr) -> io::Res
     Ok(())
 }
 
-fn get_exclusive_ids(r: &IdRange) -> Vec<u8> {
-    let mut v = vec![];
-    if 2 < r.x {
-        v.append(&mut (2..r.x).collect());
-    }
-    if r.y < 254 {
-        v.append(&mut (r.y..254).collect());
+struct ClientIdPool {
+    available_ids: Vec<Id>,
+    reserved_ids: Option<IdRange>,
+}
+
+impl ClientIdPool {
+    fn new(reserved_ids: Option<IdRange>) -> ClientIdPool {
+        let reserved_ids = reserved_ids.filter(IdRange::is_valid);
+        let available_ids: Vec<Id> = match reserved_ids {
+            Some(ref r) => r.get_other_ids(),
+            _ => (2..254).collect()
+        };
+        ClientIdPool {
+            available_ids,
+            reserved_ids,
+        }
     }
 
-    v
+    fn get(&mut self) -> Option<Id> {
+        self.available_ids.pop()
+    }
+
+    fn put(&mut self, old: &[Id]) {
+        for e in old.iter().cloned() {
+            if let Some(ref r) = self.reserved_ids {
+                if r.contains(e) {
+                    continue;
+                }
+            }
+            self.available_ids.push(e);
+        }
+    }
 }
 
 #[cfg(test)]

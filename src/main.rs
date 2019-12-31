@@ -89,7 +89,7 @@ fn main() {
     println!("{:?}", reserved_ids);
 
     match mode.as_ref() {
-        "s" => network::serve(port, &secret),
+        "s" => network::serve(port, &secret, reserved_ids),
         "c" => {
             let host = matches.opt_str("h").unwrap();
             network::connect(&host, port, true, &secret, addr_id)

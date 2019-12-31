@@ -25,6 +25,7 @@ use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 use transient_hashmap::TransientHashMap;
 use utils;
+use utils::IdRange;
 
 pub static INTERRUPTED: AtomicBool = ATOMIC_BOOL_INIT;
 static CONNECTED: AtomicBool = ATOMIC_BOOL_INIT;
@@ -187,12 +188,6 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Opti
                     let dlen = decrypted_buf.len();
                     let msg: Message = deserialize(&decrypted_buf[0..dlen]).unwrap();
                     match msg {
-                        Message::RequestWithID { .. } => {
-                            unimplemented!();
-                        }
-                        Message::Request | Message::Response { id: _, token: _ } => {
-                            warn!("Invalid message {:?} from {}", msg, addr);
-                        }
                         Message::Data {
                             id: _,
                             token: server_token,
@@ -207,6 +202,9 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Opti
                                     server_token, token
                                 );
                             }
+                        }
+                        _ => {
+                            warn!("Invalid message {:?} from {}", msg, addr);
                         }
                     }
                 }
@@ -227,7 +225,7 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Opti
     }
 }
 
-pub fn serve(port: u16, secret: &str) {
+pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
     if cfg!(not(target_os = "linux")) {
         panic!("Server mode is only available in Linux!");
     }
@@ -264,7 +262,10 @@ pub fn serve(port: u16, secret: &str) {
     let mut events = mio::Events::with_capacity(1024);
 
     let mut rng = thread_rng();
-    let mut available_ids: Vec<Id> = (2..254).collect();
+    let mut available_ids: Vec<Id> = match reserved_ids {
+        Some(ref r) if r.is_valid() => get_exclusive_ids(r),
+        _ => (2..254).collect()
+    };
     let mut client_info: TransientHashMap<Id, (Token, SocketAddr)> = TransientHashMap::new(60);
 
     let mut buf = [0u8; 1600];
@@ -319,8 +320,22 @@ pub fn serve(port: u16, secret: &str) {
                             let reply_buf = encap_msg(&reply, &sealing_key);
                             send_all(&sockfd, reply_buf.data(), &addr);
                         }
-                        Message::RequestWithID { .. } => {
-                            unimplemented!();
+                        Message::RequestWithID { id } => {
+                            let client_token: Token = rng.gen::<Token>();
+
+                            client_info.insert(id, (client_token, addr));
+
+                            info!(
+                                "Got request from {}. Assigning IP address: 10.10.10.{}.",
+                                addr, id
+                            );
+
+                            let reply = Message::Response {
+                                id,
+                                token: client_token,
+                            };
+                            let reply_buf = encap_msg(&reply, &sealing_key);
+                            send_all(&sockfd, reply_buf.data(), &addr);
                         }
                         Message::Response { id: _, token: _ } => {
                             warn!("Invalid message {:?} from {}", msg, addr)
@@ -427,6 +442,18 @@ fn block_send_all(sockfd: &UdpSocket, data: &[u8], addr: &SocketAddr) -> io::Res
     }
 
     Ok(())
+}
+
+fn get_exclusive_ids(r: &IdRange) -> Vec<u8> {
+    let mut v = vec![];
+    if 2 < r.x {
+        v.append(&mut (2..r.x).collect());
+    }
+    if r.y < 254 {
+        v.append(&mut (r.y..254).collect());
+    }
+
+    v
 }
 
 #[cfg(test)]

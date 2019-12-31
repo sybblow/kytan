@@ -186,8 +186,8 @@ pub fn get_public_ip() -> Result<String, String> {
 
 #[derive(Debug, PartialEq)]
 pub struct IdRange {
-    x: u8,
-    y: u8,
+    pub x: u8,
+    pub y: u8,
 }
 
 impl IdRange {

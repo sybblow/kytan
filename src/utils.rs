@@ -184,6 +184,39 @@ pub fn get_public_ip() -> Result<String, String> {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub struct IdRange {
+    x: u8,
+    y: u8,
+}
+
+impl IdRange {
+    pub fn is_valid(&self) -> bool {
+        self.x <= self.y
+    }
+}
+
+impl std::str::FromStr for IdRange {
+    type Err = failure::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut ids = s.split('-');
+
+        let x = if let Some(e) = ids.next() {
+            e.parse::<u8>()?
+        } else {
+            return Err(failure::err_msg("empty input"));
+        };
+        let y = if let Some(e) = ids.next() {
+            e.parse::<u8>()?
+        } else {
+            x
+        };
+
+        Ok(IdRange { x, y })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use utils::*;
@@ -200,5 +233,23 @@ mod tests {
         let gw = get_default_gateway().unwrap();
         add_route(RouteType::Host, "1.1.1.1", &gw).unwrap();
         delete_route(RouteType::Host, "1.1.1.1").unwrap();
+    }
+
+    #[test]
+    fn test_IdRange_parse() {
+        let range = ("1-2").parse::<IdRange>();
+        assert_eq!(IdRange { x: 1, y: 2 }, range.unwrap());
+
+        let range = ("1").parse::<IdRange>();
+        assert_eq!(IdRange { x: 1, y: 1 }, range.unwrap());
+
+        let range = ("1-1").parse::<IdRange>();
+        assert_eq!(IdRange { x: 1, y: 1 }, range.unwrap());
+
+        let range = ("1,2").parse::<IdRange>();
+        assert!(range.is_err());
+
+        let range = ("hao123").parse::<IdRange>();
+        assert!(range.is_err());
     }
 }

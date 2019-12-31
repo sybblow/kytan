@@ -30,6 +30,9 @@ extern crate transient_hashmap;
 extern crate log;
 extern crate ring;
 
+#[macro_use]
+extern crate failure;
+
 use std::sync::atomic::Ordering;
 
 mod device;
@@ -59,6 +62,7 @@ fn main() {
     opts.optopt("h", "host", "remote host to connect (client mode)", "HOST");
     opts.optopt("s", "secret", "shared secret", "PASSWORD");
     opts.optopt("a", "address-id", "last part of network address", "ADDR_ID");
+    opts.optopt("x", "exclude-ids", "reserved network addresses", "EX_ADDR_IDS");
 
     let args: Vec<String> = std::env::args().collect();
     let program = args[0].clone();
@@ -80,7 +84,9 @@ fn main() {
         libc::signal(libc::SIGTERM, handle_signal as libc::sighandler_t);
     }
 
-    let addr_id =matches.opt_get::<u8>("a").unwrap();
+    let addr_id = matches.opt_get::<u8>("a").unwrap();
+    let reserved_ids = matches.opt_get::<utils::IdRange>("x").unwrap();
+    println!("{:?}", reserved_ids);
 
     match mode.as_ref() {
         "s" => network::serve(port, &secret),

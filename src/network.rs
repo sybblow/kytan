@@ -464,7 +464,7 @@ impl ClientIdPool {
     }
 
     fn put(&mut self, old: &[Id]) {
-        for e in old.iter().cloned() {
+        for &e in old {
             if let Some(ref r) = self.reserved_ids {
                 if r.contains(e) {
                     continue;

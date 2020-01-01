@@ -252,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn test_IdRange_parse() {
+    fn id_range_parse_test() {
         let range = ("1-2").parse::<IdRange>();
         assert_eq!(IdRange { x: 1, y: 2 }, range.unwrap());
 

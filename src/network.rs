@@ -76,18 +76,7 @@ fn derive_keys(password: &str) -> (aead::SealingKey, aead::OpeningKey) {
 }
 
 fn initiate(socket: &UdpSocket, addr: &SocketAddr, secret: &str) -> Result<(Id, Token), String> {
-    let (sealing_key, opening_key) = derive_keys(secret);
-    let req_msg_buf = encap_msg(&Message::Request, &sealing_key);
-    try!(block_send_all(socket, req_msg_buf.data(), addr).map_err(|e| e.to_string()));
-    info!("Request sent to {}.", addr);
-
-    let mut buf = [0u8; 1600];
-    let (len, recv_addr) = try!(socket.recv_from(&mut buf).map_err(|e| e.to_string()));
-    assert_eq!(&recv_addr, addr);
-    info!("Response received from {}.", addr);
-    let decrypted_buf = aead::open_in_place(&opening_key, NONCE, &[], 0, &mut buf[0..len]).unwrap();
-    let dlen = decrypted_buf.len();
-    let resp_msg: Message = try!(deserialize(&decrypted_buf[0..dlen]).map_err(|e| e.to_string()));
+    let resp_msg = handshake(socket, addr, secret, &Message::Request {})?;
     match resp_msg {
         Message::Response { id, token } => Ok((id, token)),
         _ => Err(format!("Invalid message {:?} from {}", resp_msg, addr)),
@@ -95,8 +84,21 @@ fn initiate(socket: &UdpSocket, addr: &SocketAddr, secret: &str) -> Result<(Id, 
 }
 
 fn initiate2(socket: &UdpSocket, addr: &SocketAddr, secret: &str, id: u8) -> Result<Token, String> {
+    let resp_msg = handshake(socket, addr, secret, &Message::RequestWithID { id })?;
+    match resp_msg {
+        Message::Response { token, .. } => Ok(token),
+        _ => Err(format!("Invalid message {:?} from {}", resp_msg, addr)),
+    }
+}
+
+fn handshake(
+    socket: &UdpSocket,
+    addr: &SocketAddr,
+    secret: &str,
+    msg: &Message,
+) -> Result<Message, String> {
     let (sealing_key, opening_key) = derive_keys(secret);
-    let req_msg_buf = encap_msg(&Message::RequestWithID { id }, &sealing_key);
+    let req_msg_buf = encap_msg(msg, &sealing_key);
     try!(block_send_all(socket, req_msg_buf.data(), addr).map_err(|e| e.to_string()));
     info!("Request sent to {}.", addr);
 
@@ -106,11 +108,8 @@ fn initiate2(socket: &UdpSocket, addr: &SocketAddr, secret: &str, id: u8) -> Res
     info!("Response received from {}.", addr);
     let decrypted_buf = aead::open_in_place(&opening_key, NONCE, &[], 0, &mut buf[0..len]).unwrap();
     let dlen = decrypted_buf.len();
-    let resp_msg: Message = try!(deserialize(&decrypted_buf[0..dlen]).map_err(|e| e.to_string()));
-    match resp_msg {
-        Message::Response { token, .. } => Ok(token),
-        _ => Err(format!("Invalid message {:?} from {}", resp_msg, addr)),
-    }
+
+    deserialize(&decrypted_buf[0..dlen]).map_err(|e| e.to_string())
 }
 
 pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Option<u8>) {
@@ -451,7 +450,7 @@ impl ClientIdPool {
         let reserved_ids = reserved_ids.filter(IdRange::is_valid);
         let available_ids: Vec<Id> = match reserved_ids {
             Some(ref r) => r.get_other_ids(),
-            _ => (2..254).collect()
+            _ => (2..254).collect(),
         };
         ClientIdPool {
             available_ids,

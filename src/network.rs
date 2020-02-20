@@ -23,6 +23,7 @@ use std::io::{self, Read, Write};
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
+use std::time::Duration;
 use transient_hashmap::TransientHashMap;
 use utils;
 use utils::IdRange;
@@ -99,17 +100,17 @@ fn handshake(
 ) -> Result<Message, String> {
     let (sealing_key, opening_key) = derive_keys(secret);
     let req_msg_buf = encap_msg(msg, &sealing_key);
-    try!(block_send_all(socket, req_msg_buf.data(), addr).map_err(|e| e.to_string()));
+    block_send_all(socket, req_msg_buf.data(), addr).map_err(|e| e.to_string())?;
     info!("Request sent to {}.", addr);
 
+    socket.set_read_timeout(Some(Duration::from_secs(3)));
     let mut buf = [0u8; 1600];
-    let (len, recv_addr) = try!(socket.recv_from(&mut buf).map_err(|e| e.to_string()));
+    let (len, recv_addr) = socket.recv_from(&mut buf).map_err(|e| e.to_string())?;
     assert_eq!(&recv_addr, addr);
     info!("Response received from {}.", addr);
     let decrypted_buf = aead::open_in_place(&opening_key, NONCE, &[], 0, &mut buf[0..len]).unwrap();
-    let dlen = decrypted_buf.len();
 
-    deserialize(&decrypted_buf[0..dlen]).map_err(|e| e.to_string())
+    deserialize(decrypted_buf).map_err(|e| e.to_string())
 }
 
 pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Option<u8>) {

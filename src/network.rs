@@ -37,6 +37,7 @@ const NONCE: &[u8; 12] = &[0; 12];
 
 type Id = u8;
 type Token = u64;
+type ClientInfo = TransientHashMap<Id, (Token, SocketAddr)>;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 enum Message {
@@ -103,12 +104,14 @@ fn handshake(
     block_send_all(socket, req_msg_buf.data(), addr).map_err(|e| e.to_string())?;
     info!("Request sent to {}.", addr);
 
-    socket.set_read_timeout(Some(Duration::from_secs(3)));
+    socket
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .map_err(|e| e.to_string())?;
     let mut buf = [0u8; 1600];
     let (len, recv_addr) = socket.recv_from(&mut buf).map_err(|e| e.to_string())?;
     assert_eq!(&recv_addr, addr);
     info!("Response received from {}.", addr);
-    let decrypted_buf = aead::open_in_place(&opening_key, NONCE, &[], 0, &mut buf[0..len]).unwrap();
+    let decrypted_buf = aead::open_in_place(&opening_key, NONCE, &[], 0, &mut buf[..len]).unwrap();
 
     deserialize(decrypted_buf).map_err(|e| e.to_string())
 }
@@ -184,9 +187,8 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Opti
                 SOCK => {
                     let (len, addr) = sockfd.recv_from(&mut buf).unwrap();
                     let decrypted_buf =
-                        aead::open_in_place(&opening_key, NONCE, &[], 0, &mut buf[0..len]).unwrap();
-                    let dlen = decrypted_buf.len();
-                    let msg: Message = deserialize(&decrypted_buf[0..dlen]).unwrap();
+                        aead::open_in_place(&opening_key, NONCE, &[], 0, &mut buf[..len]).unwrap();
+                    let msg: Message = deserialize(&decrypted_buf).unwrap();
                     match msg {
                         Message::Data {
                             id: _,
@@ -210,7 +212,7 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Opti
                 }
                 TUN => {
                     let len: usize = tun.read(&mut buf).unwrap();
-                    let data = &buf[0..len];
+                    let data = &buf[..len];
                     let msg = Message::Data {
                         id: id,
                         token: token,
@@ -287,7 +289,7 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
                 SOCK => {
                     let (len, addr) = sockfd.recv_from(&mut buf).unwrap();
                     let decrypted_buf =
-                        aead::open_in_place(&opening_key, NONCE, &[], 0, &mut buf[0..len]).unwrap();
+                        aead::open_in_place(&opening_key, NONCE, &[], 0, &mut buf[..len]).unwrap();
                     let msg: Message = match deserialize(&decrypted_buf) {
                         Ok(msg) => msg,
                         Err(e) => {
@@ -301,39 +303,23 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
                     match msg {
                         Message::Request => {
                             let client_id: Id = client_id_pool.get().unwrap();
-                            let client_token: Token = rng.gen::<Token>();
-
-                            client_info.insert(client_id, (client_token, addr));
-
-                            info!(
-                                "Got request from {}. Assigning IP address: 10.10.10.{}.",
-                                addr, client_id
-                            );
-
-                            let reply = Message::Response {
-                                id: client_id,
-                                token: client_token,
-                            };
-                            let reply_buf = encap_msg(&reply, &sealing_key);
-                            send_all(&sockfd, reply_buf.data(), &addr);
+                            common_handle_handshake(
+                                &sockfd,
+                                &sealing_key,
+                                &mut client_info,
+                                &mut rng,
+                                addr,
+                                client_id,
+                            )
                         }
-                        Message::RequestWithID { id } => {
-                            let client_token: Token = rng.gen::<Token>();
-
-                            client_info.insert(id, (client_token, addr));
-
-                            info!(
-                                "Got request from {}. Assigning IP address: 10.10.10.{}.",
-                                addr, id
-                            );
-
-                            let reply = Message::Response {
-                                id,
-                                token: client_token,
-                            };
-                            let reply_buf = encap_msg(&reply, &sealing_key);
-                            send_all(&sockfd, reply_buf.data(), &addr);
-                        }
+                        Message::RequestWithID { id } => common_handle_handshake(
+                            &sockfd,
+                            &sealing_key,
+                            &mut client_info,
+                            &mut rng,
+                            addr,
+                            id,
+                        ),
                         Message::Response { id: _, token: _ } => {
                             warn!("Invalid message {:?} from {}", msg, addr)
                         }
@@ -356,7 +342,7 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
                 }
                 TUN => {
                     let len: usize = tun.read(&mut buf).unwrap();
-                    let data = &buf[0..len];
+                    let data = &buf[..len];
                     let client_id: u8 = data[19];
 
                     match client_info.get(&client_id) {
@@ -376,6 +362,31 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
             }
         }
     }
+}
+
+fn common_handle_handshake(
+    sockfd: &mio::net::UdpSocket,
+    sealing_key: &aead::SealingKey,
+    client_info: &mut ClientInfo,
+    rng: &mut rand::ThreadRng,
+    client_addr: SocketAddr,
+    client_id: Id,
+) {
+    let client_token: Token = rng.gen::<Token>();
+
+    client_info.insert(client_id, (client_token, client_addr));
+
+    info!(
+        "Got request from {}. Assigning IP address: 10.10.10.{}.",
+        client_addr, client_id
+    );
+
+    let reply = Message::Response {
+        id: client_id,
+        token: client_token,
+    };
+    let reply_buf = encap_msg(&reply, &sealing_key);
+    send_all(&sockfd, reply_buf.data(), &client_addr);
 }
 
 fn write_all(tun: &mut device::Tun, data: &[u8]) {

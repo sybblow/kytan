@@ -228,10 +228,6 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Opti
 }
 
 pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
-    if cfg!(not(target_os = "linux")) {
-        panic!("Server mode is only available in Linux!");
-    }
-
     info!("Working in server mode.");
 
     let public_ip = utils::get_public_ip().unwrap();
@@ -497,8 +493,8 @@ mod tests {
     #[test]
     fn resolve_test() {
         assert_eq!(
-            resolve("127.0.0.1").unwrap(),
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
+            super::resolve("127.0.0.1").unwrap(),
+            super::IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
         );
     }
 

@@ -33,6 +33,7 @@ extern crate ring;
 #[macro_use]
 extern crate failure;
 extern crate crossbeam;
+extern crate tokio;
 
 use std::sync::atomic::Ordering;
 

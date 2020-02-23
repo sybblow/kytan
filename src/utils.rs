@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use libc;
+use log::{info, warn};
 use std::process::Command;
 
 pub fn is_root() -> bool {
@@ -234,7 +235,7 @@ impl std::str::FromStr for IdRange {
 
 #[cfg(test)]
 mod tests {
-    use utils::*;
+    use crate::utils::*;
 
     #[test]
     fn get_default_gateway_test() {

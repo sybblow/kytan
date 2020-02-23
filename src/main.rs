@@ -17,12 +17,10 @@ mod network;
 mod packet;
 mod utils;
 
-
-use std::sync::atomic::Ordering;
-use getopts;
 use env_logger;
+use getopts;
 use libc;
-
+use std::sync::atomic::Ordering;
 
 fn print_usage(program: &str, opts: getopts::Options) {
     let brief = format!("Usage: {} [options]", program);

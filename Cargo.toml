@@ -2,6 +2,7 @@
 name = "kytan"
 version = "0.0.1"
 authors = ["Chang Lan <clan@eecs.berkeley.edu>"]
+edition = "2018"
 
 [dependencies]
 libc = "*"
@@ -10,7 +11,7 @@ mio = "*"
 serde = "*"
 serde_derive = "*"
 bincode = "*"
-log = "*"
+log = "0.4.8"
 env_logger = "*"
 dns-lookup = { git = "https://github.com/windoze/dns-lookup.git" }
 snap = "*"

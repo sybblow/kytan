@@ -295,9 +295,9 @@ impl Write for Tun {
 
 #[cfg(test)]
 mod tests {
-    use device::*;
+    use crate::device::*;
+    use crate::utils;
     use std::process;
-    use utils;
 
     #[test]
     fn create_tun_test() {

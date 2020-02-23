@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::device;
+use crate::utils::{self, IdRange};
 use bincode::{deserialize, serialize};
-use device;
 use dns_lookup;
+use log::{info, warn};
 use mio;
 use rand::{thread_rng, Rng};
 use ring::{aead, digest, pbkdf2};
+use serde_derive::{Deserialize, Serialize};
 use snap;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, SocketAddr, UdpSocket};
@@ -25,8 +28,6 @@ use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 use std::time::Duration;
 use transient_hashmap::TransientHashMap;
-use utils;
-use utils::IdRange;
 
 pub static INTERRUPTED: AtomicBool = ATOMIC_BOOL_INIT;
 static CONNECTED: AtomicBool = ATOMIC_BOOL_INIT;
@@ -51,7 +52,7 @@ const TUN: mio::Token = mio::Token(0);
 const SOCK: mio::Token = mio::Token(1);
 
 fn resolve(host: &str) -> Result<IpAddr, String> {
-    let ip_list = try!(dns_lookup::lookup_host(host).map_err(|_| "dns_lookup::lookup_host"));
+    let ip_list = dns_lookup::lookup_host(host).map_err(|_| "dns_lookup::lookup_host")?;
     Ok(ip_list.first().unwrap().clone())
 }
 
@@ -446,7 +447,7 @@ fn send_all(sockfd: &mio::net::UdpSocket, data: &[u8], addr: &SocketAddr) {
 fn block_send_all(sockfd: &UdpSocket, data: &[u8], addr: &SocketAddr) -> io::Result<()> {
     let mut sent_len = 0;
     while sent_len < data.len() {
-        sent_len += try!(sockfd.send_to(&data[sent_len..], &addr))
+        sent_len += sockfd.send_to(&data[sent_len..], &addr)?
     }
 
     Ok(())
@@ -488,7 +489,7 @@ impl ClientIdPool {
 
 #[cfg(test)]
 mod tests {
-    use network::*;
+    use crate::network::*;
     use std::net::Ipv4Addr;
 
     #[cfg(target_os = "linux")]

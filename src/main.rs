@@ -13,17 +13,17 @@
 // limitations under the License.
 
 extern crate getopts;
-extern crate mio;
 extern crate libc;
+extern crate mio;
 
 #[macro_use]
 extern crate serde_derive;
 extern crate bincode;
 
-extern crate env_logger;
 extern crate dns_lookup;
-extern crate snap;
+extern crate env_logger;
 extern crate rand;
+extern crate snap;
 extern crate transient_hashmap;
 
 #[macro_use]
@@ -36,9 +36,9 @@ extern crate failure;
 use std::sync::atomic::Ordering;
 
 mod device;
-mod utils;
 mod network;
 mod packet;
+mod utils;
 
 fn print_usage(program: &str, opts: getopts::Options) {
     let brief = format!("Usage: {} [options]", program);
@@ -62,7 +62,12 @@ fn main() {
     opts.optopt("h", "host", "remote host to connect (client mode)", "HOST");
     opts.optopt("s", "secret", "shared secret", "PASSWORD");
     opts.optopt("a", "address-id", "last part of network address", "ADDR_ID");
-    opts.optopt("x", "exclude-ids", "reserved network addresses", "EX_ADDR_IDS");
+    opts.optopt(
+        "x",
+        "exclude-ids",
+        "reserved network addresses",
+        "EX_ADDR_IDS",
+    );
 
     let args: Vec<String> = std::env::args().collect();
     let program = args[0].clone();
@@ -76,7 +81,11 @@ fn main() {
     };
 
     let mode = matches.opt_str("m").unwrap();
-    let port: u16 = matches.opt_str("p").unwrap_or(String::from("8964")).parse().unwrap();
+    let port: u16 = matches
+        .opt_str("p")
+        .unwrap_or(String::from("8964"))
+        .parse()
+        .unwrap();
     let secret = matches.opt_str("s").unwrap();
 
     unsafe {

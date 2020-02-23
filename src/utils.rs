@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::process::Command;
 use libc;
+use std::process::Command;
 
 pub fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
@@ -160,13 +160,12 @@ pub fn get_default_gateway() -> Result<String, String> {
     } else {
         unimplemented!()
     };
-    let output = Command::new("bash")
-        .arg("-c")
-        .arg(cmd)
-        .output()
-        .unwrap();
+    let output = Command::new("bash").arg("-c").arg(cmd).output().unwrap();
     if output.status.success() {
-        Ok(String::from_utf8(output.stdout).unwrap().trim_right().to_string())
+        Ok(String::from_utf8(output.stdout)
+            .unwrap()
+            .trim_right()
+            .to_string())
     } else {
         Err(String::from_utf8(output.stderr).unwrap())
     }

@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{fs, process, io};
 use libc::*;
-use std::os::unix::io::{RawFd, AsRawFd};
-use std::io::{Write, Read};
+use std::io::{Read, Write};
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::{fs, io, process};
 
 const MTU: &'static str = "1380";
 
@@ -154,9 +154,11 @@ impl Tun {
         // is our sc_unit-1
         let res = unsafe {
             let addr_ptr = &addr as *const sockaddr_ctl;
-            connect(handle.as_raw_fd(),
-                    addr_ptr as *const sockaddr,
-                    mem::size_of_val(&addr) as socklen_t)
+            connect(
+                handle.as_raw_fd(),
+                addr_ptr as *const sockaddr,
+                mem::size_of_val(&addr) as socklen_t,
+            )
         };
         if res != 0 {
             return Err(io::Error::last_os_error());
@@ -165,11 +167,13 @@ impl Tun {
         let mut name_buf = [0u8; 64];
         let mut name_length: socklen_t = 64;
         let res = unsafe {
-            getsockopt(handle.as_raw_fd(),
-                       SYSPROTO_CONTROL,
-                       UTUN_OPT_IFNAME,
-                       &mut name_buf as *mut _ as *mut c_void,
-                       &mut name_length as *mut socklen_t)
+            getsockopt(
+                handle.as_raw_fd(),
+                SYSPROTO_CONTROL,
+                UTUN_OPT_IFNAME,
+                &mut name_buf as *mut _ as *mut c_void,
+                &mut name_length as *mut socklen_t,
+            )
         };
         if res != 0 {
             return Err(io::Error::last_os_error());
@@ -291,9 +295,9 @@ impl Write for Tun {
 
 #[cfg(test)]
 mod tests {
+    use device::*;
     use std::process;
     use utils;
-    use device::*;
 
     #[test]
     fn create_tun_test() {

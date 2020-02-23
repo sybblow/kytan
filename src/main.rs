@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod device;
+mod dns;
 mod network;
 mod packet;
 mod utils;

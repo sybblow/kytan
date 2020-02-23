@@ -23,7 +23,7 @@ use ring::{aead, digest, pbkdf2};
 use serde_derive::{Deserialize, Serialize};
 use snap;
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 use std::time::Duration;
@@ -149,6 +149,15 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Opti
         id
     );
 
+    let mut dns_setter = crate::dns::DnsMonitor::new("").expect("init dns setter failed");
+    let google_dns = &[
+        IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+        IpAddr::V4(Ipv4Addr::new(8, 8, 4, 4)),
+    ];
+    dns_setter
+        .set(tun.name(), google_dns)
+        .expect("set up dns failed");
+
     let poll = mio::Poll::new().unwrap();
     info!("Setting up TUN device for polling.");
     poll.register(&tunfd, TUN, mio::Ready::readable(), mio::PollOpt::level())
@@ -226,6 +235,8 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Opti
             }
         }
     }
+
+    dns_setter.reset();
 }
 
 pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {

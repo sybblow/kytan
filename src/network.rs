@@ -236,7 +236,9 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Opti
         }
     }
 
-    dns_setter.reset();
+    if let Err(err) = dns_setter.reset() {
+        info!("Reset DNS failed: {}", err);
+    }
 }
 
 pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {

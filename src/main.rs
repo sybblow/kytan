@@ -35,10 +35,6 @@ extern "C" fn handle_signal(_: libc::c_int) {
 fn main() {
     env_logger::init();
 
-    if !utils::is_root() {
-        panic!("Please run as root");
-    }
-
     let mut opts = getopts::Options::new();
     opts.reqopt("m", "mode", "mode (server or client)", "[s|c]");
     opts.optopt("p", "port", "UDP port to listen/connect", "PORT");
@@ -51,6 +47,7 @@ fn main() {
         "reserved network addresses",
         "EX_ADDR_IDS",
     );
+    opts.optopt("g", "gateway", "use VPN as gateway", "true/false");
 
     let args: Vec<String> = std::env::args().collect();
     let program = args[0].clone();
@@ -62,6 +59,10 @@ fn main() {
             return;
         }
     };
+
+    if !utils::is_root() {
+        panic!("Please run as root");
+    }
 
     let mode = matches.opt_str("m").unwrap();
     let port: u16 = matches
@@ -78,12 +79,13 @@ fn main() {
 
     let addr_id = matches.opt_get::<u8>("a").unwrap();
     let reserved_ids = matches.opt_get::<utils::IdRange>("x").unwrap();
+    let is_gateway = matches.opt_get::<bool>("g").unwrap().unwrap_or(true);
 
     match mode.as_ref() {
         "s" => network::serve(port, &secret, reserved_ids),
         "c" => {
             let host = matches.opt_str("h").unwrap();
-            network::connect(&host, port, true, &secret, addr_id)
+            network::connect(&host, port, is_gateway, &secret, addr_id)
         }
         _ => unreachable!(),
     };

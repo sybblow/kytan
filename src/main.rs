@@ -20,7 +20,6 @@ mod utils;
 
 use env_logger;
 use getopts;
-use libc;
 use std::sync::atomic::Ordering;
 
 fn print_usage(program: &str, opts: getopts::Options) {
@@ -28,7 +27,7 @@ fn print_usage(program: &str, opts: getopts::Options) {
     print!("{}", opts.usage(&brief));
 }
 
-extern "C" fn handle_signal(_: libc::c_int) {
+fn handle_signal() {
     network::INTERRUPTED.store(true, Ordering::Relaxed);
 }
 
@@ -72,10 +71,7 @@ fn main() {
         .unwrap();
     let secret = matches.opt_str("s").unwrap();
 
-    unsafe {
-        libc::signal(libc::SIGINT, handle_signal as libc::sighandler_t);
-        libc::signal(libc::SIGTERM, handle_signal as libc::sighandler_t);
-    }
+    ctrlc::set_handler(handle_signal);
 
     let addr_id = matches.opt_get::<u8>("a").unwrap();
     let reserved_ids = matches.opt_get::<utils::IdRange>("x").unwrap();

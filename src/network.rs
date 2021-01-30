@@ -19,20 +19,20 @@ use dns_lookup;
 use log::{info, warn};
 use mio;
 use rand::{thread_rng, Rng};
-use ring::{aead, digest, pbkdf2};
+use ring::{aead, pbkdf2};
 use serde_derive::{Deserialize, Serialize};
 use snap;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::num::NonZeroU32;
 use std::os::unix::io::AsRawFd;
-use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use transient_hashmap::TransientHashMap;
 
-pub static INTERRUPTED: AtomicBool = ATOMIC_BOOL_INIT;
-static CONNECTED: AtomicBool = ATOMIC_BOOL_INIT;
-static LISTENING: AtomicBool = ATOMIC_BOOL_INIT;
+pub static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+static CONNECTED: AtomicBool = AtomicBool::new(false);
+static LISTENING: AtomicBool = AtomicBool::new(false);
 const KEY_LEN: usize = 32;
 
 type Id = u8;
@@ -124,6 +124,8 @@ fn send_initiate_msg(
     let (len, recv_addr) = socket.recv_from(&mut buf).map_err(|e| e.to_string())?;
     assert_eq!(&recv_addr, addr);
     info!("Response received from {}.", addr);
+    // reset timeout
+    socket.set_read_timeout(None).map_err(|e| e.to_string())?;
 
     decap_msg(&mut buf[..len], &key).map_err(|e| e.to_string())
 }

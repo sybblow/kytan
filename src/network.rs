@@ -125,6 +125,7 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Opti
     let local_addr: SocketAddr = "0.0.0.0:0".parse::<SocketAddr>().unwrap();
     let socket = UdpSocket::bind(&local_addr).unwrap();
 
+    // client keys
     let (sealing_key, opening_key) = derive_keys(secret);
 
     let (id, token) = if let Some(v) = addr_id {
@@ -282,6 +283,7 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
     let mut encoder = snap::Encoder::new();
     let mut decoder = snap::Decoder::new();
 
+    // server keys
     let (sealing_key, opening_key) = derive_keys(secret);
 
     LISTENING.store(true, Ordering::Relaxed);

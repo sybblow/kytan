@@ -79,7 +79,7 @@ fn derive_keys(password: &str) -> (aead::SealingKey, aead::OpeningKey) {
 }
 
 fn initiate(socket: &UdpSocket, addr: &SocketAddr, secret: &str) -> Result<(Id, Token), String> {
-    let resp_msg = handshake(socket, addr, secret, &Message::Request {})?;
+    let resp_msg = send_initiate_msg(socket, addr, secret, &Message::Request {})?;
     match resp_msg {
         Message::Response { id, token } => Ok((id, token)),
         _ => Err(format!("Invalid message {:?} from {}", resp_msg, addr)),
@@ -87,14 +87,14 @@ fn initiate(socket: &UdpSocket, addr: &SocketAddr, secret: &str) -> Result<(Id, 
 }
 
 fn initiate2(socket: &UdpSocket, addr: &SocketAddr, secret: &str, id: u8) -> Result<Token, String> {
-    let resp_msg = handshake(socket, addr, secret, &Message::RequestWithID { id })?;
+    let resp_msg = send_initiate_msg(socket, addr, secret, &Message::RequestWithID { id })?;
     match resp_msg {
         Message::Response { token, .. } => Ok(token),
         _ => Err(format!("Invalid message {:?} from {}", resp_msg, addr)),
     }
 }
 
-fn handshake(
+fn send_initiate_msg(
     socket: &UdpSocket,
     addr: &SocketAddr,
     secret: &str,
@@ -314,7 +314,7 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
                     match msg {
                         Message::Request => {
                             let client_id: Id = client_id_pool.get().unwrap();
-                            common_handle_handshake(
+                            common_handle_initiate(
                                 &sockfd,
                                 &sealing_key,
                                 &mut client_info,
@@ -323,7 +323,7 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
                                 client_id,
                             )
                         }
-                        Message::RequestWithID { id } => common_handle_handshake(
+                        Message::RequestWithID { id } => common_handle_initiate(
                             &sockfd,
                             &sealing_key,
                             &mut client_info,
@@ -375,7 +375,7 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
     }
 }
 
-fn common_handle_handshake(
+fn common_handle_initiate(
     sockfd: &mio::net::UdpSocket,
     sealing_key: &aead::SealingKey,
     client_info: &mut ClientInfo,
@@ -523,7 +523,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn integration_test() {
         assert!(utils::is_root());
-        let server = thread::spawn(move || serve(8964, "password"));
+        let server = thread::spawn(move || serve(8964, "password", None));
 
         thread::sleep_ms(1000);
         assert!(LISTENING.load(Ordering::Relaxed));
@@ -535,7 +535,7 @@ mod tests {
         let (id, token) = initiate(&local_socket, &remote_addr, "password").unwrap();
         assert_eq!(id, 253);
 
-        let client = thread::spawn(move || connect("127.0.0.1", 8964, false, "password"));
+        let client = thread::spawn(move || connect("127.0.0.1", 8964, false, "password", None));
 
         thread::sleep_ms(1000);
         assert!(CONNECTED.load(Ordering::Relaxed));

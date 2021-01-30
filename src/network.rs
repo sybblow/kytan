@@ -112,9 +112,8 @@ fn handshake(
     let (len, recv_addr) = socket.recv_from(&mut buf).map_err(|e| e.to_string())?;
     assert_eq!(&recv_addr, addr);
     info!("Response received from {}.", addr);
-    let decrypted_buf = aead::open_in_place(&opening_key, NONCE, &[], 0, &mut buf[..len]).unwrap();
 
-    deserialize(decrypted_buf).map_err(|e| e.to_string())
+    decap_msg(&mut buf[..len], &opening_key).map_err(|e| e.to_string())
 }
 
 pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Option<u8>) {
@@ -196,9 +195,7 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Opti
             match event.token() {
                 SOCK => {
                     let (len, addr) = sockfd.recv_from(&mut buf).unwrap();
-                    let decrypted_buf =
-                        aead::open_in_place(&opening_key, NONCE, &[], 0, &mut buf[..len]).unwrap();
-                    let msg: Message = deserialize(&decrypted_buf).unwrap();
+                    let msg: Message = decap_msg(&mut buf[..len], &opening_key).unwrap();
                     match msg {
                         Message::Data {
                             id: _,
@@ -302,14 +299,12 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
             match event.token() {
                 SOCK => {
                     let (len, addr) = sockfd.recv_from(&mut buf).unwrap();
-                    let decrypted_buf =
-                        aead::open_in_place(&opening_key, NONCE, &[], 0, &mut buf[..len]).unwrap();
-                    let msg: Message = match deserialize(&decrypted_buf) {
+                    let msg: Message = match decap_msg(&mut buf[..len], &opening_key) {
                         Ok(msg) => msg,
                         Err(e) => {
                             warn!(
-                                "Invalid raw message {:?} from {} deserialize failed: {:?}",
-                                decrypted_buf, addr, e
+                                "Invalid raw message from {} deserialize failed: {:?}",
+                                addr, e
                             );
                             continue;
                         }
@@ -425,6 +420,12 @@ fn encap_msg(msg: &Message, sealing_key: &aead::SealingKey) -> Buf {
     let len = aead::seal_in_place(&sealing_key, NONCE, &[], &mut encoded_msg, TAG_LEN).unwrap();
 
     Buf::new(encoded_msg, len)
+}
+
+fn decap_msg(buf: &mut [u8], opening_key: &aead::OpeningKey) -> bincode::Result<Message> {
+    let decrypted_buf = aead::open_in_place(opening_key, NONCE, &[], 0, buf).unwrap();
+
+    deserialize(&decrypted_buf)
 }
 
 struct Buf {

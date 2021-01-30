@@ -17,7 +17,7 @@ dns-lookup = "1.0.0"
 snap = "0.2.4"
 rand = "0.4.2"
 transient-hashmap = "0.4.1"
-ring = "0.12.1"
+ring = "0.16"
 failure = "0.1.6"
 err-derive = "0.2.1"
 

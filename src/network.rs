@@ -24,6 +24,7 @@ use serde_derive::{Deserialize, Serialize};
 use snap;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::num::NonZeroU32;
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 use std::time::Duration;
@@ -33,12 +34,16 @@ pub static INTERRUPTED: AtomicBool = ATOMIC_BOOL_INIT;
 static CONNECTED: AtomicBool = ATOMIC_BOOL_INIT;
 static LISTENING: AtomicBool = ATOMIC_BOOL_INIT;
 const KEY_LEN: usize = 32;
-const TAG_LEN: usize = 16;
-const NONCE: &[u8; 12] = &[0; 12];
 
 type Id = u8;
 type Token = u64;
 type ClientInfo = TransientHashMap<Id, (Token, SocketAddr)>;
+
+fn generate_add_nonce() -> (aead::Aad<[u8; 0]>, aead::Nonce) {
+    let nonce = aead::Nonce::assume_unique_for_key([0; 12]);
+    let aad = aead::Aad::empty();
+    (aad, nonce)
+}
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 enum Message {
@@ -69,13 +74,20 @@ fn create_tun_attempt() -> device::Tun {
     attempt(0)
 }
 
-fn derive_keys(password: &str) -> (aead::SealingKey, aead::OpeningKey) {
+fn derive_keys(password: &str) -> aead::LessSafeKey {
     let mut key = [0; KEY_LEN];
     let salt = vec![0; 64];
-    pbkdf2::derive(&digest::SHA256, 1024, &salt, password.as_bytes(), &mut key);
-    let sealing_key = aead::SealingKey::new(&aead::AES_256_GCM, &key).unwrap();
-    let opening_key = aead::OpeningKey::new(&aead::AES_256_GCM, &key).unwrap();
-    (sealing_key, opening_key)
+    let pbkdf2_iterations: NonZeroU32 = NonZeroU32::new(1024).unwrap();
+    pbkdf2::derive(
+        pbkdf2::PBKDF2_HMAC_SHA256,
+        pbkdf2_iterations,
+        &salt,
+        password.as_bytes(),
+        &mut key,
+    );
+    let less_safe_key =
+        aead::LessSafeKey::new(aead::UnboundKey::new(&aead::AES_256_GCM, &key).unwrap());
+    less_safe_key
 }
 
 fn initiate(socket: &UdpSocket, addr: &SocketAddr, secret: &str) -> Result<(Id, Token), String> {
@@ -100,9 +112,9 @@ fn handshake(
     secret: &str,
     msg: &Message,
 ) -> Result<Message, String> {
-    let (sealing_key, opening_key) = derive_keys(secret);
-    let req_msg_buf = encap_msg(msg, &sealing_key);
-    block_send_all(socket, req_msg_buf.data(), addr).map_err(|e| e.to_string())?;
+    let key = derive_keys(secret);
+    let req_msg = encap_msg(msg, &key);
+    block_send_all(socket, &req_msg, addr).map_err(|e| e.to_string())?;
     info!("Request sent to {}.", addr);
 
     socket
@@ -113,7 +125,7 @@ fn handshake(
     assert_eq!(&recv_addr, addr);
     info!("Response received from {}.", addr);
 
-    decap_msg(&mut buf[..len], &opening_key).map_err(|e| e.to_string())
+    decap_msg(&mut buf[..len], &key).map_err(|e| e.to_string())
 }
 
 pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Option<u8>) {
@@ -126,7 +138,7 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Opti
     let socket = UdpSocket::bind(&local_addr).unwrap();
 
     // client keys
-    let (sealing_key, opening_key) = derive_keys(secret);
+    let key = derive_keys(secret);
 
     let (id, token) = if let Some(v) = addr_id {
         (v, initiate2(&socket, &remote_addr, &secret, v).unwrap())
@@ -196,7 +208,7 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Opti
             match event.token() {
                 SOCK => {
                     let (len, addr) = sockfd.recv_from(&mut buf).unwrap();
-                    let msg: Message = decap_msg(&mut buf[..len], &opening_key).unwrap();
+                    let msg: Message = decap_msg(&mut buf[..len], &key).unwrap();
                     match msg {
                         Message::Data {
                             id: _,
@@ -226,8 +238,8 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Opti
                         token: token,
                         data: encoder.compress_vec(data).unwrap(),
                     };
-                    let msg_buf = encap_msg(&msg, &sealing_key);
-                    send_all(&sockfd, msg_buf.data(), &remote_addr);
+                    let msg_buf = encap_msg(&msg, &key);
+                    send_all(&sockfd, &msg_buf, &remote_addr);
                 }
                 _ => unreachable!(),
             }
@@ -235,7 +247,7 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Opti
     }
 
     if let Err(err) = dns_setter.reset() {
-        info!("Reset DNS failed: {}", err);
+        info!("Reset DNS failed: {:?}", err);
     }
 }
 
@@ -284,7 +296,7 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
     let mut decoder = snap::Decoder::new();
 
     // server keys
-    let (sealing_key, opening_key) = derive_keys(secret);
+    let key = derive_keys(secret);
 
     LISTENING.store(true, Ordering::Relaxed);
     info!("Ready for transmission.");
@@ -301,7 +313,7 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
             match event.token() {
                 SOCK => {
                     let (len, addr) = sockfd.recv_from(&mut buf).unwrap();
-                    let msg: Message = match decap_msg(&mut buf[..len], &opening_key) {
+                    let msg: Message = match decap_msg(&mut buf[..len], &key) {
                         Ok(msg) => msg,
                         Err(e) => {
                             warn!(
@@ -316,7 +328,7 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
                             let client_id: Id = client_id_pool.get().unwrap();
                             common_handle_handshake(
                                 &sockfd,
-                                &sealing_key,
+                                &key,
                                 &mut client_info,
                                 &mut rng,
                                 addr,
@@ -325,7 +337,7 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
                         }
                         Message::RequestWithID { id } => common_handle_handshake(
                             &sockfd,
-                            &sealing_key,
+                            &key,
                             &mut client_info,
                             &mut rng,
                             addr,
@@ -364,8 +376,8 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
                                 token: token,
                                 data: encoder.compress_vec(data).unwrap(),
                             };
-                            let msg_buf = encap_msg(&msg, &sealing_key);
-                            send_all(&sockfd, msg_buf.data(), &addr);
+                            let msg_buf = encap_msg(&msg, &key);
+                            send_all(&sockfd, &msg_buf, &addr);
                         }
                     }
                 }
@@ -377,7 +389,7 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
 
 fn common_handle_handshake(
     sockfd: &mio::net::UdpSocket,
-    sealing_key: &aead::SealingKey,
+    key: &aead::LessSafeKey,
     client_info: &mut ClientInfo,
     rng: &mut rand::ThreadRng,
     client_addr: SocketAddr,
@@ -396,8 +408,8 @@ fn common_handle_handshake(
         id: client_id,
         token: client_token,
     };
-    let reply_buf = encap_msg(&reply, &sealing_key);
-    send_all(&sockfd, reply_buf.data(), &client_addr);
+    let reply_buf = encap_msg(&reply, &key);
+    send_all(&sockfd, &reply_buf, &client_addr);
 }
 
 fn write_all(tun: &mut device::Tun, data: &[u8]) {
@@ -415,34 +427,20 @@ fn write_all(tun: &mut device::Tun, data: &[u8]) {
     }
 }
 
-fn encap_msg(msg: &Message, sealing_key: &aead::SealingKey) -> Buf {
-    let mut encoded_msg: Vec<u8> = serialize(msg).unwrap();
-    let len = encoded_msg.len() + TAG_LEN;
-    encoded_msg.resize(len, 0);
-    let len = aead::seal_in_place(&sealing_key, NONCE, &[], &mut encoded_msg, TAG_LEN).unwrap();
+fn encap_msg(msg: &Message, key: &aead::LessSafeKey) -> Vec<u8> {
+    let mut buf: Vec<u8> = serialize(&msg).unwrap();
+    buf.resize(buf.len() + key.algorithm().tag_len(), 0);
+    let (aad, nonce) = generate_add_nonce();
+    key.seal_in_place_append_tag(nonce, aad, &mut buf).unwrap();
 
-    Buf::new(encoded_msg, len)
+    buf
 }
 
-fn decap_msg(buf: &mut [u8], opening_key: &aead::OpeningKey) -> bincode::Result<Message> {
-    let decrypted_buf = aead::open_in_place(opening_key, NONCE, &[], 0, buf).unwrap();
+fn decap_msg(buf: &mut [u8], key: &aead::LessSafeKey) -> bincode::Result<Message> {
+    let (aad, nonce) = generate_add_nonce();
+    let decrypted_buf = key.open_in_place(nonce, aad, buf).unwrap();
 
     deserialize(&decrypted_buf)
-}
-
-struct Buf {
-    inner_data: Vec<u8>,
-    pub len: usize,
-}
-
-impl Buf {
-    fn new(inner_data: Vec<u8>, len: usize) -> Buf {
-        Buf { inner_data, len }
-    }
-
-    fn data(&self) -> &[u8] {
-        &self.inner_data[..self.len]
-    }
 }
 
 fn send_all(sockfd: &mio::net::UdpSocket, data: &[u8], addr: &SocketAddr) {

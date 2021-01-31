@@ -39,6 +39,9 @@ type Id = u8;
 type Token = u64;
 type ClientInfo = TransientHashMap<Id, (Token, SocketAddr)>;
 
+type Encoder = snap::raw::Encoder;
+type Decoder = snap::raw::Decoder;
+
 fn generate_add_nonce() -> (aead::Aad<[u8; 0]>, aead::Nonce) {
     let nonce = aead::Nonce::assume_unique_for_key([0; 12]);
     let aad = aead::Aad::empty();
@@ -195,8 +198,8 @@ pub fn connect(host: &str, port: u16, default: bool, secret: &str, addr_id: Opti
         None
     };
 
-    let mut encoder = snap::Encoder::new();
-    let mut decoder = snap::Decoder::new();
+    let mut encoder = Encoder::new();
+    let mut decoder = Decoder::new();
 
     CONNECTED.store(true, Ordering::Relaxed);
     info!("Ready for transmission.");
@@ -294,8 +297,8 @@ pub fn serve(port: u16, secret: &str, reserved_ids: Option<IdRange>) {
     let mut client_info: TransientHashMap<Id, (Token, SocketAddr)> = TransientHashMap::new(60);
 
     let mut buf = [0u8; 1600];
-    let mut encoder = snap::Encoder::new();
-    let mut decoder = snap::Decoder::new();
+    let mut encoder = Encoder::new();
+    let mut decoder = Decoder::new();
 
     // server keys
     let key = derive_keys(secret);

@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod crypto;
 mod device;
 mod dns;
 mod network;
 mod packet;
+mod proto;
 mod utils;
 
 use env_logger;

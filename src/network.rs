@@ -12,19 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::crypto::*;
 use crate::device;
+use crate::proto::*;
 use crate::utils::{self, IdRange};
 use bincode::{deserialize, serialize};
 use dns_lookup;
 use log::{info, warn};
 use mio;
 use rand::{thread_rng, Rng};
-use ring::{aead, pbkdf2};
-use serde_derive::{Deserialize, Serialize};
+use ring::aead;
 use snap;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
-use std::num::NonZeroU32;
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -33,28 +33,11 @@ use transient_hashmap::TransientHashMap;
 pub static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 static CONNECTED: AtomicBool = AtomicBool::new(false);
 static LISTENING: AtomicBool = AtomicBool::new(false);
-const KEY_LEN: usize = 32;
 
-type Id = u8;
-type Token = u64;
 type ClientInfo = TransientHashMap<Id, (Token, SocketAddr)>;
 
 type Encoder = snap::raw::Encoder;
 type Decoder = snap::raw::Decoder;
-
-fn generate_add_nonce() -> (aead::Aad<[u8; 0]>, aead::Nonce) {
-    let nonce = aead::Nonce::assume_unique_for_key([0; 12]);
-    let aad = aead::Aad::empty();
-    (aad, nonce)
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-enum Message {
-    Request,
-    Response { id: Id, token: Token },
-    Data { id: Id, token: Token, data: Vec<u8> },
-    RequestWithID { id: Id },
-}
 
 const TUN: mio::Token = mio::Token(0);
 const SOCK: mio::Token = mio::Token(1);
@@ -75,22 +58,6 @@ fn create_tun_attempt() -> device::Tun {
         }
     }
     attempt(0)
-}
-
-fn derive_keys(password: &str) -> aead::LessSafeKey {
-    let mut key = [0; KEY_LEN];
-    let salt = vec![0; 64];
-    let pbkdf2_iterations: NonZeroU32 = NonZeroU32::new(1024).unwrap();
-    pbkdf2::derive(
-        pbkdf2::PBKDF2_HMAC_SHA256,
-        pbkdf2_iterations,
-        &salt,
-        password.as_bytes(),
-        &mut key,
-    );
-    let less_safe_key =
-        aead::LessSafeKey::new(aead::UnboundKey::new(&aead::AES_256_GCM, &key).unwrap());
-    less_safe_key
 }
 
 fn initiate(socket: &UdpSocket, addr: &SocketAddr, secret: &str) -> Result<(Id, Token), String> {
@@ -430,22 +397,6 @@ fn write_all(tun: &mut device::Tun, data: &[u8]) {
             }
         }
     }
-}
-
-fn encap_msg(msg: &Message, key: &aead::LessSafeKey) -> Vec<u8> {
-    let mut buf: Vec<u8> = serialize(&msg).unwrap();
-    buf.resize(buf.len() + key.algorithm().tag_len(), 0);
-    let (aad, nonce) = generate_add_nonce();
-    key.seal_in_place_append_tag(nonce, aad, &mut buf).unwrap();
-
-    buf
-}
-
-fn decap_msg(buf: &mut [u8], key: &aead::LessSafeKey) -> bincode::Result<Message> {
-    let (aad, nonce) = generate_add_nonce();
-    let decrypted_buf = key.open_in_place(nonce, aad, buf).unwrap();
-
-    deserialize(&decrypted_buf)
 }
 
 fn send_all(sockfd: &mio::net::UdpSocket, data: &[u8], addr: &SocketAddr) {
